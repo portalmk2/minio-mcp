@@ -1,6 +1,6 @@
 # 🗄️ MinIO MCP Server
 
-[![npm version](https://badge.fury.io/js/@pickstar-2002/minio-mcp.svg)](https://badge.fury.io/js/@pickstar-2002/minio-mcp)
+[![npm version](https://img.shields.io/npm/v/@pickstar-2002/minio-mcp.svg)](https://www.npmjs.com/package/@pickstar-2002/minio-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
