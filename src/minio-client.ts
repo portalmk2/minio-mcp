@@ -3,6 +3,13 @@ import { MinIOConfig, BucketInfo, ObjectInfo, StorageStats, BatchOperationResult
 import { Readable } from 'node:stream';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { createWriteStream } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { URL } from 'node:url';
+import * as http from 'node:http';
+import * as https from 'node:https';
 
 export class MinIOStorageClient {
   private client: Minio.Client | null = null;
@@ -105,15 +112,36 @@ export class MinIOStorageClient {
    */
   async uploadFile(bucketName: string, objectName: string, filePath: string, metadata?: Record<string, string>): Promise<void> {
     this.ensureConnected();
-    
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`文件不存在: ${filePath}`);
-    }
 
-    const stats = fs.statSync(filePath);
-    const stream = fs.createReadStream(filePath);
-    
-    await this.client!.putObject(bucketName, objectName, stream, stats.size, metadata);
+    let tempFilePath: string | null = null;
+
+    try {
+      // 检查filePath是否为URL
+      let actualFilePath = filePath;
+      if (this.isValidUrl(filePath)) {
+        // 下载URL内容到临时文件
+        tempFilePath = await this.downloadFromUrlToTempFile(filePath);
+        actualFilePath = tempFilePath;
+      }
+
+      if (!fs.existsSync(actualFilePath)) {
+        throw new Error(`文件不存在: ${actualFilePath}`);
+      }
+
+      const stats = fs.statSync(actualFilePath);
+      const stream = fs.createReadStream(actualFilePath);
+
+      await this.client!.putObject(bucketName, objectName, stream, stats.size, metadata);
+    } finally {
+      // 确保临时文件被删除
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        try {
+          fs.unlinkSync(tempFilePath);
+        } catch (error) {
+          console.error(`删除临时文件失败: ${tempFilePath}`, error);
+        }
+      }
+    }
   }
 
   /**
@@ -345,5 +373,66 @@ export class MinIOStorageClient {
   async deleteBucketPolicy(bucketName: string): Promise<void> {
     this.ensureConnected();
     await this.client!.setBucketPolicy(bucketName, '');
+  }
+
+  /**
+   * 验证字符串是否为有效的URL
+   */
+  private isValidUrl(urlString: string): boolean {
+    try {
+      const url = new URL(urlString);
+      return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * 从URL下载文件到临时文件
+   */
+  private async downloadFromUrlToTempFile(url: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const urlObj = new URL(url);
+      const tempFileName = path.join(tmpdir(), `minio_mcp_temp_${randomBytes(16).toString('hex')}`);
+
+      const fileStream = createWriteStream(tempFileName);
+
+      const client = urlObj.protocol === 'https:' ? https : http;
+
+      const request = client.get(url, (response) => {
+        if (response.statusCode !== 200) {
+          reject(new Error(`下载失败: ${response.statusCode} ${response.statusMessage}`));
+          return;
+        }
+
+        pipeline(response, fileStream)
+          .then(() => resolve(tempFileName))
+          .catch(reject);
+      });
+
+      request.on('error', (error) => {
+        // 如果出现错误，先删除可能已创建的临时文件
+        try {
+          if (fs.existsSync(tempFileName)) {
+            fs.unlinkSync(tempFileName);
+          }
+        } catch (cleanupError) {
+          console.error(`清理临时文件时出错: ${cleanupError}`);
+        }
+        reject(error);
+      });
+
+      request.setTimeout(30000, () => {  // 30秒超时
+        request.destroy();
+        try {
+          if (fs.existsSync(tempFileName)) {
+            fs.unlinkSync(tempFileName);
+          }
+        } catch (cleanupError) {
+          console.error(`清理超时临时文件时出错: ${cleanupError}`);
+        }
+        reject(new Error('下载超时'));
+      });
+    });
   }
 }
